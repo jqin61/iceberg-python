@@ -135,7 +135,7 @@ def test_partition_type(table_schema_simple: Schema) -> None:
 #############################
 
 from datetime import date, datetime
-
+import uuid
 import pytz
 
 TEST_DATA_WITH_NULL = {
@@ -166,7 +166,7 @@ TEST_DATA_WITH_NULL = {
     ],
 }
 import pyarrow as pa
-
+import pytest
 
 @pytest.fixture(scope="session")
 def arrow_table_with_null() -> pa.Table:
@@ -193,7 +193,7 @@ def arrow_table_with_null() -> pa.Table:
 
 
 from pyiceberg.schema import Schema
-from pyiceberg.transforms import IdentityTransform, MonthTransform
+from pyiceberg.transforms import IdentityTransform, MonthTransform, YearTransform, DayTransform, HourTransform, TruncateTransform, BucketTransform, IdentityTransform
 from pyiceberg.types import (
     BinaryType,
     BooleanType,
@@ -226,19 +226,98 @@ TABLE_SCHEMA = Schema(
     NestedField(field_id=12, name="fixed", field_type=FixedType(16), required=False),
 )
 
+from pyiceberg.typedef import  Record
+from pyiceberg.partitioning import PartitionField, PartitionSpec, PartitionFieldValue, PartitionKey
 
 @pytest.mark.mexico
-def test_partition_key(arrow_table_with_null) -> None:
-    from pyiceberg.partitioning import PartitionField, PartitionSpec, PartitionFieldValue, PartitionKey
+@pytest.mark.parametrize(
+    "partition_fields, partition_field_values, expected_partition_record, expected_hive_partition_path_slice", 
+    [
+        # Year Transform
+        (
+            [PartitionField(source_id=8, field_id=1001, transform=MonthTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=8, value=datetime(2023, 1, 1, 11, 55, 59, 999999))],
+            Record(partition_field=((2023-1970) * 12)),
+            "partition_field=2023-01"
+        ),
+        (
+            [PartitionField(source_id=9, field_id=1001, transform=MonthTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=9, value=datetime(2023, 1, 1, 11, 55, 59,999999, tzinfo=pytz.timezone('America/New_York')))],
+            Record(partition_field=((2023-1970) * 12)),
+            "partition_field=2023-01"
+        ),
+        (
+            [PartitionField(source_id=10, field_id=1001, transform=MonthTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=10, value=date(2023, 1, 1))],
+            Record(partition_field=((2023-1970) * 12)),
+            "partition_field=2023-01"
+        ),
+        # Month Transform
+        (
+            [PartitionField(source_id=8, field_id=1001, transform=YearTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=8, value=datetime(2023, 1, 1, 11, 55, 59, 999999))],
+            Record(partition_field=(2023-1970)),
+            "partition_field=2023"
+        ),
+        (
+            [PartitionField(source_id=9, field_id=1001, transform=YearTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=9, value=datetime(2023, 1, 1, 11, 55, 59,999999, tzinfo=pytz.timezone('America/New_York')))],
+            Record(partition_field=(2023-1970)),
+            "partition_field=2023"
+        ),
+        (
+            [PartitionField(source_id=10, field_id=1001, transform=YearTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=10, value=date(2023, 1, 1))],
+            Record(partition_field=(2023-1970)),
+            "partition_field=2023"
+        ),
+        # Day Transform
+        (
+            [PartitionField(source_id=8, field_id=1001, transform=DayTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=8, value=datetime(2023, 1, 1, 11, 55, 59, 999999))],
+            Record(partition_field=19358),
+            "partition_field=2023-01-01"
+        ),
+        (
+            [PartitionField(source_id=9, field_id=1001, transform=DayTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=9, value=datetime(2023, 1, 1, 11, 55, 59,999999, tzinfo=pytz.timezone('America/New_York')))],
+            Record(partition_field=19358),
+            "partition_field=2023-01-01"
+        ),
+        (
+            [PartitionField(source_id=10, field_id=1001, transform=DayTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=10, value=date(2023, 1, 1))],
+            Record(partition_field=19358),
+            "partition_field=2023-01-01"
+        ),
+        # Hour Transform
+        (
+            [PartitionField(source_id=8, field_id=1001, transform=HourTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=8, value=datetime(2023, 1, 1, 11, 55, 59, 999999))],
+            Record(partition_field=464603),
+            "partition_field=2023-01-01-11"
+        ),
+        (
+            [PartitionField(source_id=9, field_id=1001, transform=HourTransform(), name="partition_field")],
+            [PartitionFieldValue(source_id=9, value=datetime(2023, 1, 1, 11, 55, 59,999999, tzinfo=pytz.timezone('America/New_York')))],
+            Record(partition_field=464608), # 464608 = 464603 + 5, new york winter day light saving time
+            "partition_field=2023-01-01-16"
+        ),
+    ]
+)
+def test_partition_key(arrow_table_with_null, partition_fields, partition_field_values, expected_partition_record, expected_hive_partition_path_slice) -> None:
 
-    spec = PartitionSpec(PartitionField(source_id=8, field_id=1001, transform=MonthTransform(), name="test_partition_field"))
+    spec = PartitionSpec(*partition_fields)
 
     key = PartitionKey(
-        raw_partition_key_values=[PartitionFieldValue(source_id=8, value=datetime(2023, 1, 1, 11, 55, 59))],
+        raw_partition_field_values=partition_field_values,
         partition_spec=spec,
         schema=TABLE_SCHEMA,
     )
-    print(key.partition)
-    print("-----------")
-    print(key.to_path())
-    print("1")
+    # print(f"{key.partition=}")
+    # print(f"{key.to_path()=}")
+    # this affects the metadata in DataFile and all above layers
+    assert key.partition == expected_partition_record 
+    # this affects the parquet file path
+    assert key.to_path() == expected_hive_partition_path_slice
+
