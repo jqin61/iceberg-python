@@ -34,6 +34,7 @@ from pydantic import (
     WithJsonSchema,
 )
 from typing_extensions import Annotated
+from urllib.parse import quote
 
 from pyiceberg.schema import Schema
 from pyiceberg.transforms import Transform, parse_transform
@@ -208,10 +209,13 @@ class PartitionSpec(IcebergBaseModel):
 
             partition_field = self.fields[pos]  # partition field
             value_str = partition_field.transform.to_human_string(field_types[pos].field_type, value=value)
+            from urllib.parse import quote
+            value_str = quote(value_str, safe='')
             value_strs.append(value_str)
             field_strs.append(partition_field.name)
             pos += 1
-        path = "/".join([field_str + "=" + value_str for field_str, value_str in zip(field_strs, value_strs)]).replace(":", "%3A")
+
+        path = "/".join([field_str + "=" + value_str for field_str, value_str in zip(field_strs, value_strs)])
         return path
 
 
