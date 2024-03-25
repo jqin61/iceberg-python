@@ -1725,6 +1725,7 @@ def write_file(io: FileIO, table_metadata: TableMetadata, tasks: Iterator[WriteT
 
         file_path = f'{table_metadata.location}/data/{task.generate_data_file_path("parquet")}'  # generate_data_file_filename
         schema = table_metadata.schema()
+
         arrow_file_schema = schema_to_pyarrow(schema)
 
         fo = io.new_output(file_path)
@@ -1735,7 +1736,9 @@ def write_file(io: FileIO, table_metadata: TableMetadata, tasks: Iterator[WriteT
         )
         with fo.create(overwrite=True) as fos:
             with pq.ParquetWriter(fos, schema=arrow_file_schema, **parquet_writer_kwargs) as writer:
-                writer.write_table(task.df, row_group_size=row_group_size)
+                # align the columns accordingly in case input arrow table has columns in order different from iceberg table
+                df_to_write = task.df.select(arrow_file_schema.names)
+                writer.write_table(df_to_write, row_group_size=row_group_size)
 
         data_file = DataFile(
             content=DataFileContent.DATA,

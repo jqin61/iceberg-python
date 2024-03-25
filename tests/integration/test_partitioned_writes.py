@@ -444,7 +444,8 @@ def test_summaries_with_null(spark: SparkSession, session_catalog: Catalog, arro
     tbl.append(arrow_table_with_null)
     tbl.overwrite(arrow_table_with_null)
     tbl.append(arrow_table_with_null)
-    tbl.overwrite(arrow_table_with_null, overwrite_filter="int=1")
+    valid_arrow_table_with_null_to_overwrite = arrow_table_with_null.drop(['int'])
+    tbl.overwrite(valid_arrow_table_with_null_to_overwrite, overwrite_filter="int=1")
 
     rows = spark.sql(
         f"""
@@ -512,16 +513,16 @@ def test_summaries_with_null(spark: SparkSession, session_catalog: Catalog, arro
     # static overwrite which deletes 2 record (one from step3, one from step4) and 2 datafile, adding 3 new data files and 3 records, so total data files and records are 6 - 2 + 3 = 7
     assert summaries[4] == {
         'removed-files-size': '10790',
-        'added-data-files': '3',
+        'added-data-files': '1',
         'total-equality-deletes': '0',
         'added-records': '3',
         'deleted-data-files': '2',
         'total-position-deletes': '0',
-        'added-files-size': '15029',
+        'added-files-size': '5455',
         'total-delete-files': '0',
         'deleted-records': '2',
-        'total-files-size': '34297',
-        'total-data-files': '7',
+        'total-files-size': '24723',
+        'total-data-files': '5',
         'total-records': '7',
     }
 
@@ -546,7 +547,9 @@ def test_data_files_with_table_partitioned_with_null(
     tbl.append(arrow_table_with_null)
     tbl.overwrite(arrow_table_with_null)
     tbl.append(arrow_table_with_null)
-    tbl.overwrite(arrow_table_with_null, overwrite_filter="int=1")
+
+    valid_arrow_table_with_null_to_overwrite = arrow_table_with_null.drop(['int'])
+    tbl.overwrite(valid_arrow_table_with_null_to_overwrite, overwrite_filter="int=1")
 
     # first append links to 1 manifest file (M1)
     # second append's manifest list links to  2 manifest files (M1, M2)
@@ -561,7 +564,7 @@ def test_data_files_with_table_partitioned_with_null(
     # M3      0         0           6        S3
     # M4      3         0           0        S3
     # M5      3         0           0        S4
-    # M6      3         0           0        S5
+    # M6      1         0           0        S5
     # M7      0         4           2        S5
 
     spark.sql(
@@ -575,7 +578,7 @@ def test_data_files_with_table_partitioned_with_null(
         FROM {identifier}.all_manifests
     """
     ).collect()
-    assert [row.added_data_files_count for row in rows] == [3, 3, 3, 3, 0, 3, 3, 3, 0]
+    assert [row.added_data_files_count for row in rows] == [3, 3, 3, 3, 0, 3, 3, 1, 0]
     assert [row.existing_data_files_count for row in rows] == [0, 0, 0, 0, 0, 0, 0, 0, 4]
     assert [row.deleted_data_files_count for row in rows] == [0, 0, 0, 0, 6, 0, 0, 0, 2]
 
@@ -668,11 +671,19 @@ def test_query_filter_after_append_overwrite_table_with_expr(
         properties={'format-version': '1'},
     )
 
-    for _ in range(2):
+    for _ in range(3):
         tbl.append(arrow_table_with_null)
-    tbl.overwrite(arrow_table_with_null, expr)
+        spark.sql(f"refresh table {identifier}")
+        spark.sql(f"select file_path from {identifier}.files").show(20, False)
+        spark.sql(f"select * from {identifier}").show(20, False)
+
+    valid_arrow_table_with_null_to_overwrite = arrow_table_with_null.drop([part_col])
+    tbl.overwrite(valid_arrow_table_with_null_to_overwrite, expr)
 
     iceberg_table = session_catalog.load_table(identifier=identifier)
+    spark.sql(f"refresh table {identifier}")
+    spark.sql(f"select file_path from {identifier}.files").show(20, False)
     spark.sql(f"select * from {identifier}").show(20, False)
-    assert iceberg_table.scan(row_filter=expr).to_arrow().num_rows == 1
-    assert iceberg_table.scan().to_arrow().num_rows == 7
+
+    assert iceberg_table.scan().to_arrow().num_rows == 9
+    assert iceberg_table.scan(row_filter=expr).to_arrow().num_rows == 3
