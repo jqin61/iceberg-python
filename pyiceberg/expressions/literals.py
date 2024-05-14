@@ -141,6 +141,7 @@ def literal(value: L) -> Literal[L]:
         return StringLiteral(value)
     elif isinstance(value, UUID):
         return UUIDLiteral(value.bytes)  # type: ignore
+
     elif isinstance(value, bytes):
         return BinaryLiteral(value)
     elif isinstance(value, Decimal):
@@ -309,6 +310,10 @@ class LongLiteral(Literal[int]):
 
     @to.register(TimestampType)
     def _(self, _: TimestampType) -> Literal[int]:
+        return TimestampLiteral(self.value)
+
+    @to.register(TimestamptzType)
+    def _(self, _: TimestamptzType) -> Literal[int]:
         return TimestampLiteral(self.value)
 
     @to.register(DecimalType)

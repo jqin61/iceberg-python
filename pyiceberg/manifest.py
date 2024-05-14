@@ -466,6 +466,7 @@ def construct_partition_summaries(spec: PartitionSpec, schema: Schema, partition
                 raise ValueError(f"Expected a primitive type for the partition field, got {field_type}")
             partition_key = partition_keys[i]
             field_stats[i].update(partition_key)
+            print("field_stats", field_stats[0]._contains_null)
     return [field.to_summary() for field in field_stats]
 
 
@@ -909,7 +910,7 @@ class ManifestListWriterV2(ManifestListWriter):
         self._sequence_number = sequence_number
 
     def prepare_manifest(self, manifest_file: ManifestFile) -> ManifestFile:
-        wrapped_manifest_file = ManifestFile(*manifest_file.record_fields())
+        wrapped_manifest_file = ManifestFile(*manifest_file.record_values())
 
         if wrapped_manifest_file.sequence_number == UNASSIGNED_SEQ:
             # if the sequence number is being assigned here, then the manifest must be created by the current operation.

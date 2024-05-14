@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 # pylint:disable=redefined-outer-name
+import uuid
 
 import pyarrow as pa
 import pytest
@@ -23,6 +24,7 @@ from pyspark.sql import SparkSession
 from pyiceberg.catalog import Catalog
 from pyiceberg.exceptions import NoSuchTableError
 from pyiceberg.partitioning import PartitionField, PartitionSpec
+from pyiceberg.schema import Schema
 from pyiceberg.transforms import (
     BucketTransform,
     DayTransform,
@@ -31,6 +33,12 @@ from pyiceberg.transforms import (
     MonthTransform,
     TruncateTransform,
     YearTransform,
+)
+from pyiceberg.types import (
+    DoubleType,
+    NestedField,
+    TimeType,
+    UUIDType,
 )
 from utils import TABLE_SCHEMA, _create_table
 
@@ -176,6 +184,66 @@ def test_query_filter_appended_null_partitioned(
     assert len(rows) == 6
 
 
+@pytest.mark.adrian
+@pytest.mark.parametrize(
+    "part_col",
+    ['int', 'bool', 'string', "string_long", "long", "float", "date", "timestamp", "binary", "timestamptz"],
+)
+@pytest.mark.parametrize(
+    "format_version",
+    [1, 2],
+)
+def test_query_filter_dynamic_overwrite_null_partitioned(
+    session_catalog: Catalog, spark: SparkSession, arrow_table_with_null: pa.Table, part_col: str, format_version: int
+) -> None:
+    # Given
+    identifier = f"default.arrow_table_v{format_version}_appended_with_null_partitioned_on_col_{part_col}"
+    nested_field = TABLE_SCHEMA.find_field(part_col)
+    partition_spec = PartitionSpec(
+        PartitionField(source_id=nested_field.field_id, field_id=1001, transform=IdentityTransform(), name=part_col)
+    )
+
+    # When
+    tbl = _create_table(
+        session_catalog=session_catalog,
+        identifier=identifier,
+        properties={"format-version": str(format_version)},
+        data=[],
+        partition_spec=partition_spec,
+    )
+    # Append with arrow_table_1 with lines [A,B,C] and then arrow_table_2 with lines[A,B,C,A,B,C]
+    tbl.append(arrow_table_with_null)
+    tbl.append(pa.concat_tables([arrow_table_with_null, arrow_table_with_null]))
+
+    # Then
+    assert tbl.format_version == format_version, f"Expected v{format_version}, got: v{tbl.format_version}"
+    df = spark.table(identifier)
+    for col in arrow_table_with_null.column_names:
+        df = spark.table(identifier)
+        assert df.where(f"{col} is not null").count() == 6, f"Expected 6 non-null rows for {col}"
+        assert df.where(f"{col} is null").count() == 3, f"Expected 3 null rows for {col}"
+    # expecting 6 files: first append with [A], [B], [C],  second append with [A, A], [B, B], [C, C]
+    rows = spark.sql(f"select partition from {identifier}.files").collect()
+    assert len(rows) == 6
+
+    tbl.dynamic_overwrite(arrow_table_with_null)
+    # tbl.dynamic_overwrite(arrow_table_with_null.slice(0, 2))
+    # Then
+    assert tbl.format_version == format_version, f"Expected v{format_version}, got: v{tbl.format_version}"
+    df = spark.table(identifier)
+    for col in arrow_table_with_null.column_names:
+        df = spark.table(identifier)
+        assert (
+            df.where(f"{col} is not null").count() == 2
+        ), f"Expected 2 non-null rows for {col},"  # but got {df.where(f'{col} is not null').count()}"
+        assert (
+            df.where(f"{col} is null").count() == 1
+        ), f"Expected 1 null rows for {col},"  # but got {df.where(f'{col} is null').count()}"
+    # expecting 3 files:
+    rows = spark.sql(f"select partition from {identifier}.files").collect()
+    assert len(rows) == 3
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize(
     "part_col", ['int', 'bool', 'string', "string_long", "long", "float", "double", "date", "timestamptz", "timestamp", "binary"]
@@ -217,7 +285,7 @@ def test_query_filter_v1_v2_append_null(
         assert df.where(f"{col} is null").count() == 2, f"Expected 2 null rows for {col}"
 
 
-@pytest.mark.integration
+@pytest.mark.france
 def test_summaries_with_null(spark: SparkSession, session_catalog: Catalog, arrow_table_with_null: pa.Table) -> None:
     identifier = "default.arrow_table_summaries"
 
@@ -234,50 +302,66 @@ def test_summaries_with_null(spark: SparkSession, session_catalog: Catalog, arro
 
     tbl.append(arrow_table_with_null)
     tbl.append(arrow_table_with_null)
+    tbl.dynamic_overwrite(arrow_table_with_null)
+    tbl.append(arrow_table_with_null)
+    tbl.dynamic_overwrite(arrow_table_with_null.slice(0, 2))
 
     rows = spark.sql(
         f"""
-        SELECT operation, summary
+        SELECT *
         FROM {identifier}.snapshots
         ORDER BY committed_at ASC
     """
     ).collect()
 
     operations = [row.operation for row in rows]
-    assert operations == ['append', 'append']
-
+    assert operations == ['append', 'append', 'delete', 'append', 'append', 'delete', 'append']
+    print(operations)
     summaries = [row.summary for row in rows]
-    assert summaries[0] == {
-        'changed-partition-count': '3',
-        'added-data-files': '3',
-        'added-files-size': '15029',
-        'added-records': '3',
-        'total-data-files': '3',
-        'total-delete-files': '0',
-        'total-equality-deletes': '0',
-        'total-files-size': '15029',
-        'total-position-deletes': '0',
-        'total-records': '3',
-    }
-
-    assert summaries[1] == {
-        'changed-partition-count': '3',
-        'added-data-files': '3',
-        'added-files-size': '15029',
-        'added-records': '3',
-        'total-data-files': '6',
-        'total-delete-files': '0',
-        'total-equality-deletes': '0',
-        'total-files-size': '30058',
-        'total-position-deletes': '0',
-        'total-records': '6',
-    }
+    print("checking summary:", summaries)
+    assert summaries == [{'changed-partition-count': '3', 'added-data-files': '3', 'total-equality-deletes': '0', 'added-records': '3', 'total-position-deletes': '0', 'added-files-size': '15029', 'total-delete-files': '0', 'total-files-size': '15029', 'total-data-files': '3', 'total-records': '3'}, {'changed-partition-count': '3', 'added-data-files': '3', 'total-equality-deletes': '0', 'added-records': '3', 'total-position-deletes': '0', 'added-files-size': '15029', 'total-delete-files': '0', 'total-files-size': '30058', 'total-data-files': '6', 'total-records': '6'}, {'removed-files-size': '30058', 'changed-partition-count': '3', 'total-equality-deletes': '0', 'deleted-data-files': '6', 'total-position-deletes': '0', 'total-delete-files': '0', 'deleted-records': '6', 'total-files-size': '0', 'total-data-files': '0', 'total-records': '0'}, {'changed-partition-count': '3', 'added-data-files': '3', 'total-equality-deletes': '0', 'added-records': '3', 'total-position-deletes': '0', 'added-files-size': '15029', 'total-delete-files': '0', 'total-files-size': '15029', 'total-data-files': '3', 'total-records': '3'}, {'changed-partition-count': '3', 'added-data-files': '3', 'total-equality-deletes': '0', 'added-records': '3', 'total-position-deletes': '0', 'added-files-size': '15029', 'total-delete-files': '0', 'total-files-size': '30058', 'total-data-files': '6', 'total-records': '6'}, {'removed-files-size': '19268', 'changed-partition-count': '2', 'total-equality-deletes': '0', 'deleted-data-files': '4', 'total-position-deletes': '0', 'total-delete-files': '0', 'deleted-records': '4', 'total-files-size': '10790', 'total-data-files': '2', 'total-records': '2'}, {'changed-partition-count': '2', 'added-data-files': '2', 'total-equality-deletes': '0', 'added-records': '2', 'total-position-deletes': '0', 'added-files-size': '9634', 'total-delete-files': '0', 'total-files-size': '20424', 'total-data-files': '4', 'total-records': '4'}]
 
 
-@pytest.mark.integration
+@pytest.mark.adrian
 def test_data_files_with_table_partitioned_with_null(
     spark: SparkSession, session_catalog: Catalog, arrow_table_with_null: pa.Table
 ) -> None:
+    # Append           : First append has manifestlist file linking to 1 manifest file.
+    #                    ML1 = [M1]
+    #
+    # Append           : Second append's manifestlist links to 2 manifest files.
+    #                    ML2 = [M1, M2]
+    #
+    # Dynamic Overwrite: Dynamic overwrite on all partitions of the table delete all data and append new data
+    #                    it has 2 snapshots of delete and append and thus 2 snapshots
+    #                    the first snapshot generates M3 with 6 delete data entries collected from M1 and M2.
+    #                    ML3 = [M3]
+    #
+    #                    The second snapshot generates M4 with 3 appended data entries and since M3 (previous manifests) only has delte entries it does not lint to it.
+    #                    ML4 = [M4]
+
+    # Append           : Append generates M5 with new data entries and links to all previous manifests which is M4 .
+    #                    ML5 = [M5, M4]
+
+    # Dynamic Overwrite: Dynamic overwrite on partial partitions of the table delete partial data and append new data
+    #                    it has 2 snapshots of delete and append and thus 2 snapshots
+    #                    the first snapshot generates M6 with 4 delete data entries collected from M1 and M2,
+    #                    then it generates M7 as remaining existing entries from M1 and M8 from M2
+    #                    ML6 = [M6, M7, M8]
+    #
+    #                    The second snapshot generates M9 with 3 appended data entries and it also looks at manifests in ML6 (previous manifests)
+    #                    it ignores M6 since it only has delte entries but it links to M7 and M8.
+    #                    ML7 = [M9, M7, M8]
+
+    # tldr:
+    # APPEND               ML1 = [M1]
+    # APPEND               ML2 = [M1, M2]
+    # DYNAMIC_OVERWRITE    ML3 = [M3]
+    #                      ML4 = [M4]
+    # APPEND               ML5 = [M5, M4]
+    # DYNAMIC_OVERWRITE    ML6 = [M6, M7, M8]
+    #                      ML7 = [M9, M7, M8]
+
     identifier = "default.arrow_data_files"
 
     try:
@@ -287,28 +371,120 @@ def test_data_files_with_table_partitioned_with_null(
     tbl = session_catalog.create_table(
         identifier=identifier,
         schema=TABLE_SCHEMA,
-        partition_spec=PartitionSpec(PartitionField(source_id=4, field_id=1001, transform=IdentityTransform(), name="int")),
+        partition_spec=PartitionSpec(
+            PartitionField(source_id=1, field_id=1001, transform=IdentityTransform(), name="bool"),
+            PartitionField(source_id=4, field_id=1002, transform=IdentityTransform(), name="int"),
+        ),
         properties={'format-version': '1'},
     )
 
     tbl.append(arrow_table_with_null)
     tbl.append(arrow_table_with_null)
-
-    # added_data_files_count, existing_data_files_count, deleted_data_files_count
+    tbl.dynamic_overwrite(arrow_table_with_null)
+    tbl.append(arrow_table_with_null)
+    tbl.dynamic_overwrite(arrow_table_with_null.slice(0, 2))
     rows = spark.sql(
         f"""
-        SELECT added_data_files_count, existing_data_files_count, deleted_data_files_count
+        SELECT *
         FROM {identifier}.all_manifests
     """
     ).collect()
 
-    assert [row.added_data_files_count for row in rows] == [3, 3, 3]
-    assert [row.existing_data_files_count for row in rows] == [
-        0,
-        0,
-        0,
+    assert [row.partition_summaries[0].contains_null for row in rows] == [
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        False,
+        False,
+        True,
+        False,
+        False,
     ]
-    assert [row.deleted_data_files_count for row in rows] == [0, 0, 0]
+    assert [row.partition_summaries[1].contains_null for row in rows] == [
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        False,
+        False,
+        True,
+        False,
+        False,
+    ]
+    assert [row.partition_summaries[0].lower_bound for row in rows] == [
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        True,
+        False,
+        False,
+    ]
+    assert [row.partition_summaries[1].lower_bound for row in rows] == [
+        '1',
+        '1',
+        '1',
+        '1',
+        '1',
+        '1',
+        '1',
+        '1',
+        '9',
+        '9',
+        '1',
+        '9',
+        '9',
+    ]
+    assert [row.partition_summaries[0].upper_bound for row in rows] == [
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        False,
+        True,
+        True,
+        False,
+        True,
+        True,
+    ]
+    assert [row.partition_summaries[1].upper_bound for row in rows] == [
+        '9',
+        '9',
+        '9',
+        '9',
+        '9',
+        '9',
+        '9',
+        '1',
+        '9',
+        '9',
+        '1',
+        '9',
+        '9',
+    ]
+    assert [row.added_data_files_count for row in rows] == [3, 3, 3, 0, 3, 3, 3, 0, 0, 0, 2, 0, 0]
+    assert [row.existing_data_files_count for row in rows] == [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1]
+    assert [row.deleted_data_files_count for row in rows] == [0, 0, 0, 6, 0, 0, 0, 4, 0, 0, 0, 0, 0]
 
 
 @pytest.mark.integration
@@ -387,4 +563,65 @@ def test_unsupported_transform(
     )
 
     with pytest.raises(ValueError, match="All transforms are not supported.*"):
+        tbl.append(arrow_table_with_null)
+
+
+@pytest.mark.france
+@pytest.mark.parametrize(
+    "spec",
+    [
+        (PartitionSpec(PartitionField(source_id=1, field_id=1001, transform=IdentityTransform(), name="double"))),
+        (PartitionSpec(PartitionField(source_id=2, field_id=1001, transform=IdentityTransform(), name="time"))),
+        (PartitionSpec(PartitionField(source_id=3, field_id=1001, transform=IdentityTransform(), name="uuid"))),
+    ],
+)
+def test_unsupported_field_type_for_partition(
+    spec: PartitionSpec, spark: SparkSession, session_catalog: Catalog, arrow_table_with_null: pa.Table
+) -> None:
+    iceberg_table_schema = Schema(
+        NestedField(field_id=1, name="double", field_type=DoubleType(), required=False),
+        NestedField(field_id=2, name="time", field_type=TimeType(), required=False),
+        # NestedField(field_id=3, name="uuid", field_type=UUIDType(), required=False),
+    )
+
+    import pyarrow as pa
+
+    pa_schema = pa.schema([
+        ("double", pa.float64()),
+        ("time", pa.time64('us')),
+        # ("uuid", pa.binary(16)),
+    ])
+
+    arrow_table_with_null = pa.Table.from_pydict(
+        {
+            'double': [0.0, None, 0.9],
+            'time': [
+                1_000_000,
+                None,
+                3_000_000,
+            ],  # Example times: 1s, none, and 3s past midnight #Spark does not support time fields
+            # this does not even need to go through this test because it fails the schema check for pyarrow does not have uuid type
+            # 'uuid': [
+            #     uuid.UUID('00000000-0000-0000-0000-000000000000').bytes,
+            #     None,
+            #     uuid.UUID('11111111-1111-1111-1111-111111111111').bytes,
+            # ],
+        },
+        schema=pa_schema,
+    )
+    identifier = "default.unsupported_field_type_on_partition"
+
+    try:
+        session_catalog.drop_table(identifier=identifier)
+    except NoSuchTableError:
+        pass
+
+    tbl = session_catalog.create_table(
+        identifier=identifier,
+        schema=iceberg_table_schema,
+        partition_spec=spec,
+        properties={'format-version': '1'},
+    )
+
+    with pytest.raises(ValueError, match="Does not support write for partition field.*"):
         tbl.append(arrow_table_with_null)

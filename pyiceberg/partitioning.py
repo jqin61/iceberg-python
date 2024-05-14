@@ -229,7 +229,7 @@ class PartitionSpec(IcebergBaseModel):
 
         field_strs = []
         value_strs = []
-        for pos, value in enumerate(data.record_fields()):
+        for pos, value in enumerate(data.record_values()):
             partition_field = self.fields[pos]
             value_str = partition_field.transform.to_human_string(field_types[pos].field_type, value=value)
 
@@ -380,6 +380,10 @@ class PartitionKey:
     raw_partition_field_values: List[PartitionFieldValue]
     partition_spec: PartitionSpec
     schema: Schema
+
+    # @cached_property
+    # def fields(self) -> List[str]:
+    #     return [field.name for field in partition_spec.fields]
 
     @cached_property
     def partition(self) -> Record:  # partition key transformed with iceberg internal representation as input
