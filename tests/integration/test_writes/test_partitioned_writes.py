@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 # pylint:disable=redefined-outer-name
-import uuid
 
 import pyarrow as pa
 import pytest
@@ -38,7 +37,6 @@ from pyiceberg.types import (
     DoubleType,
     NestedField,
     TimeType,
-    UUIDType,
 )
 from utils import TABLE_SCHEMA, _create_table
 
@@ -184,7 +182,7 @@ def test_query_filter_appended_null_partitioned(
     assert len(rows) == 6
 
 
-@pytest.mark.adrian
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "part_col",
     ['int', 'bool', 'string', "string_long", "long", "float", "date", "timestamp", "binary", "timestamptz"],
@@ -233,12 +231,8 @@ def test_query_filter_dynamic_overwrite_null_partitioned(
     df = spark.table(identifier)
     for col in arrow_table_with_null.column_names:
         df = spark.table(identifier)
-        assert (
-            df.where(f"{col} is not null").count() == 2
-        ), f"Expected 2 non-null rows for {col},"  # but got {df.where(f'{col} is not null').count()}"
-        assert (
-            df.where(f"{col} is null").count() == 1
-        ), f"Expected 1 null rows for {col},"  # but got {df.where(f'{col} is null').count()}"
+        assert df.where(f"{col} is not null").count() == 2, f"Expected 2 non-null rows for {col},"
+        assert df.where(f"{col} is null").count() == 1, f"Expected 1 null rows for {col},"
     # expecting 3 files:
     rows = spark.sql(f"select partition from {identifier}.files").collect()
     assert len(rows) == 3
@@ -285,7 +279,7 @@ def test_query_filter_v1_v2_append_null(
         assert df.where(f"{col} is null").count() == 2, f"Expected 2 null rows for {col}"
 
 
-@pytest.mark.france
+@pytest.mark.integration
 def test_summaries_with_null(spark: SparkSession, session_catalog: Catalog, arrow_table_with_null: pa.Table) -> None:
     identifier = "default.arrow_table_summaries"
 
@@ -316,13 +310,96 @@ def test_summaries_with_null(spark: SparkSession, session_catalog: Catalog, arro
 
     operations = [row.operation for row in rows]
     assert operations == ['append', 'append', 'delete', 'append', 'append', 'delete', 'append']
-    print(operations)
     summaries = [row.summary for row in rows]
-    print("checking summary:", summaries)
-    assert summaries == [{'changed-partition-count': '3', 'added-data-files': '3', 'total-equality-deletes': '0', 'added-records': '3', 'total-position-deletes': '0', 'added-files-size': '15029', 'total-delete-files': '0', 'total-files-size': '15029', 'total-data-files': '3', 'total-records': '3'}, {'changed-partition-count': '3', 'added-data-files': '3', 'total-equality-deletes': '0', 'added-records': '3', 'total-position-deletes': '0', 'added-files-size': '15029', 'total-delete-files': '0', 'total-files-size': '30058', 'total-data-files': '6', 'total-records': '6'}, {'removed-files-size': '30058', 'changed-partition-count': '3', 'total-equality-deletes': '0', 'deleted-data-files': '6', 'total-position-deletes': '0', 'total-delete-files': '0', 'deleted-records': '6', 'total-files-size': '0', 'total-data-files': '0', 'total-records': '0'}, {'changed-partition-count': '3', 'added-data-files': '3', 'total-equality-deletes': '0', 'added-records': '3', 'total-position-deletes': '0', 'added-files-size': '15029', 'total-delete-files': '0', 'total-files-size': '15029', 'total-data-files': '3', 'total-records': '3'}, {'changed-partition-count': '3', 'added-data-files': '3', 'total-equality-deletes': '0', 'added-records': '3', 'total-position-deletes': '0', 'added-files-size': '15029', 'total-delete-files': '0', 'total-files-size': '30058', 'total-data-files': '6', 'total-records': '6'}, {'removed-files-size': '19268', 'changed-partition-count': '2', 'total-equality-deletes': '0', 'deleted-data-files': '4', 'total-position-deletes': '0', 'total-delete-files': '0', 'deleted-records': '4', 'total-files-size': '10790', 'total-data-files': '2', 'total-records': '2'}, {'changed-partition-count': '2', 'added-data-files': '2', 'total-equality-deletes': '0', 'added-records': '2', 'total-position-deletes': '0', 'added-files-size': '9634', 'total-delete-files': '0', 'total-files-size': '20424', 'total-data-files': '4', 'total-records': '4'}]
+    assert summaries == [
+        {
+            'changed-partition-count': '3',
+            'added-data-files': '3',
+            'total-equality-deletes': '0',
+            'added-records': '3',
+            'total-position-deletes': '0',
+            'added-files-size': '15029',
+            'total-delete-files': '0',
+            'total-files-size': '15029',
+            'total-data-files': '3',
+            'total-records': '3',
+        },
+        {
+            'changed-partition-count': '3',
+            'added-data-files': '3',
+            'total-equality-deletes': '0',
+            'added-records': '3',
+            'total-position-deletes': '0',
+            'added-files-size': '15029',
+            'total-delete-files': '0',
+            'total-files-size': '30058',
+            'total-data-files': '6',
+            'total-records': '6',
+        },
+        {
+            'removed-files-size': '30058',
+            'changed-partition-count': '3',
+            'total-equality-deletes': '0',
+            'deleted-data-files': '6',
+            'total-position-deletes': '0',
+            'total-delete-files': '0',
+            'deleted-records': '6',
+            'total-files-size': '0',
+            'total-data-files': '0',
+            'total-records': '0',
+        },
+        {
+            'changed-partition-count': '3',
+            'added-data-files': '3',
+            'total-equality-deletes': '0',
+            'added-records': '3',
+            'total-position-deletes': '0',
+            'added-files-size': '15029',
+            'total-delete-files': '0',
+            'total-files-size': '15029',
+            'total-data-files': '3',
+            'total-records': '3',
+        },
+        {
+            'changed-partition-count': '3',
+            'added-data-files': '3',
+            'total-equality-deletes': '0',
+            'added-records': '3',
+            'total-position-deletes': '0',
+            'added-files-size': '15029',
+            'total-delete-files': '0',
+            'total-files-size': '30058',
+            'total-data-files': '6',
+            'total-records': '6',
+        },
+        {
+            'removed-files-size': '19268',
+            'changed-partition-count': '2',
+            'total-equality-deletes': '0',
+            'deleted-data-files': '4',
+            'total-position-deletes': '0',
+            'total-delete-files': '0',
+            'deleted-records': '4',
+            'total-files-size': '10790',
+            'total-data-files': '2',
+            'total-records': '2',
+        },
+        {
+            'changed-partition-count': '2',
+            'added-data-files': '2',
+            'total-equality-deletes': '0',
+            'added-records': '2',
+            'total-position-deletes': '0',
+            'added-files-size': '9634',
+            'total-delete-files': '0',
+            'total-files-size': '20424',
+            'total-data-files': '4',
+            'total-records': '4',
+        },
+    ]
 
 
-@pytest.mark.adrian
+@pytest.mark.integration
 def test_data_files_with_table_partitioned_with_null(
     spark: SparkSession, session_catalog: Catalog, arrow_table_with_null: pa.Table
 ) -> None:
@@ -566,7 +643,7 @@ def test_unsupported_transform(
         tbl.append(arrow_table_with_null)
 
 
-@pytest.mark.france
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "spec",
     [

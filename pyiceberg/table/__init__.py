@@ -466,10 +466,6 @@ class Transaction:
         if table_arrow_schema != df.schema:
             df = df.cast(table_arrow_schema)
 
-            # # commit_uuid = uuid.uuid4()
-            # print("data_files are", data_files)
-            # print("these are partitions", [data_file.partition for data_file in data_files])
-
         # If dataframe does not have data, there is no need to overwrite
         if df.shape[0] == 0:
             return
@@ -490,26 +486,6 @@ class Transaction:
         ) as append_snapshot:
             for data_file in data_files:
                 append_snapshot.append_data_file(data_file)
-
-        # the parent snapshot inheritance relationship is determined at the time of class initiation
-        # so could not use nested context manager to achieve this.
-
-        # data_files: List[DataFile] = []
-        # with self.update_snapshot(snapshot_properties=snapshot_properties).fast_append() as append_snapshot:
-        #     # skip writing data files if the dataframe is empty
-        #     data_files = [data_file for data_file in _dataframe_to_data_files(table_metadata=self._table.metadata, write_uuid=append_snapshot.commit_uuid, df=df, io=self._table.io)]
-        #     for data_file in data_files:
-        #         append_snapshot.append_data_file(data_file)
-        #     # context manager of delete snapshot needs to be nested within append snapshot
-        #     # because it needs to know data files to be appended for detecting partitions from these datafiles
-        #     # and at the same time the delete needs to happen before append so that it does not delete the datafiles just appended.
-        #     print("partitions are", [df.partition for df in data_files])
-        #     with self.update_snapshot(snapshot_properties=snapshot_properties).delete_files_by_partitions() as delete_snapshot:
-        #         print("try to delete")
-        #         if not isinstance(delete_snapshot, DeleteFilesByPartition):
-        #             raise ValueError("Expected DeleteFilesByPartition but get", type(delete_snapshot))
-
-        #         delete_snapshot.delete_by_partitions([data_file.partition for data_file in data_files])
 
     def overwrite(
         self, df: pa.Table, overwrite_filter: BooleanExpression = ALWAYS_TRUE, snapshot_properties: Dict[str, str] = EMPTY_DICT
@@ -2980,13 +2956,7 @@ class _MergingSnapshotProducer(UpdateTableMetadata[U], Generic[U]):
         added_manifests = executor.submit(_write_added_manifest)
         delete_manifests = executor.submit(_write_delete_manifest)
         existing_manifests = executor.submit(self._existing_manifests)
-        res1 = added_manifests.result()
-        res2 = delete_manifests.result()
-        res3 = existing_manifests.result()
-        print("delete manifests are", res1)
-        print(res2)
-        print(res3)
-        return res1 + res2 + res3
+        return added_manifests.result() + delete_manifests.result() + existing_manifests.result()
 
     def _summary(self, snapshot_properties: Dict[str, str] = EMPTY_DICT) -> Summary:
         ssc = SnapshotSummaryCollector()
@@ -3026,9 +2996,7 @@ class _MergingSnapshotProducer(UpdateTableMetadata[U], Generic[U]):
         )
 
     def _commit(self) -> UpdatesAndRequirements:
-        print("commit called", type(self))
         new_manifests = self._manifests()
-        print("new manifests are", new_manifests)
         next_sequence_number = self._transaction.table_metadata.next_sequence_number()
 
         summary = self._summary(self.snapshot_properties)
@@ -3137,10 +3105,6 @@ class DeleteFiles(_MergingSnapshotProducer["DeleteFiles"]):
             data_file=entry.data_file,
         )
 
-    # @abstractmethod
-    # @cached_property
-    # def _build_manifest_evaluator(self, spec_id: int) -> Callable[[ManifestFile], bool]: ...
-
     @abstractmethod
     @cached_property
     def partition_filters(self) -> KeyDefaultDict[int, BooleanExpression]: ...
@@ -3196,8 +3160,6 @@ class DeleteFilesByPartition(DeleteFiles):
     def partition_filters(self) -> KeyDefaultDict[int, BooleanExpression]:
         return KeyDefaultDict(self._build_partition_predicate)
 
-    # def delete_by_partitions(self, partitions: List[Record]) -> None:
-    #     self._partition_keys = set(partitions)
     def delete_by_partitions(self, partitions: List[Record]) -> None:
         print("partition deleted registered", partitions)
         self._partitions = set(partitions)
@@ -3291,8 +3253,6 @@ class DeleteFilesByPartition(DeleteFiles):
                         manifest_file.manifest_path,
                     )
                     existing_manifests.append(manifest_file)
-        print("existing_manifests", [manifest_file.manifest_path for manifest in existing_manifests])
-        print("total_deleted_entries", [entry.data_file.file_path for entry in total_deleted_entries])
         return existing_manifests, total_deleted_entries, False
 
 

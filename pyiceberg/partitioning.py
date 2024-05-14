@@ -381,10 +381,6 @@ class PartitionKey:
     partition_spec: PartitionSpec
     schema: Schema
 
-    # @cached_property
-    # def fields(self) -> List[str]:
-    #     return [field.name for field in partition_spec.fields]
-
     @cached_property
     def partition(self) -> Record:  # partition key transformed with iceberg internal representation as input
         iceberg_typed_key_values = {}

@@ -552,11 +552,9 @@ class _ManifestEvalVisitor(BoundBooleanExpressionVisitor[bool]):
     partition_filter: BooleanExpression
 
     def __init__(self, partition_struct_schema: Schema, partition_filter: BooleanExpression, case_sensitive: bool) -> None:
-        print("self.partition_filter", partition_filter)
         self.partition_filter = bind(partition_struct_schema, rewrite_not(partition_filter), case_sensitive)
 
     def eval(self, manifest: ManifestFile) -> bool:
-        print("manifest.partitions", manifest.partitions)
         if partitions := manifest.partitions:
             self.partition_fields = partitions
             return visit(self.partition_filter, self)

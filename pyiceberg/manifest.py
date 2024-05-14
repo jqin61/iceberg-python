@@ -466,7 +466,6 @@ def construct_partition_summaries(spec: PartitionSpec, schema: Schema, partition
                 raise ValueError(f"Expected a primitive type for the partition field, got {field_type}")
             partition_key = partition_keys[i]
             field_stats[i].update(partition_key)
-            print("field_stats", field_stats[0]._contains_null)
     return [field.to_summary() for field in field_stats]
 
 
