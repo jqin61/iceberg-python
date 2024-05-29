@@ -478,7 +478,9 @@ class Transaction:
                 table_metadata=self._table.metadata, write_uuid=append_snapshot_commit_uuid, df=df, io=self._table.io
             )
         )
-        with self.update_snapshot(snapshot_properties=snapshot_properties).delete() as delete_snapshot:
+        with self.update_snapshot(snapshot_properties=snapshot_properties).delete(
+            only_delete_within_latest_spec=True
+        ) as delete_snapshot:
             delete_partitions = [data_file.partition for data_file in data_files]
             delete_filter = _build_partition_predicate(
                 spec_id=self.table_metadata.spec().spec_id, delete_partitions=delete_partitions
