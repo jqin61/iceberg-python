@@ -229,7 +229,7 @@ class PartitionSpec(IcebergBaseModel):
 
         field_strs = []
         value_strs = []
-        for pos, value in enumerate(data.record_fields()):
+        for pos, value in enumerate(data.record_values()):
             partition_field = self.fields[pos]
             value_str = partition_field.transform.to_human_string(field_types[pos].field_type, value=value)
 

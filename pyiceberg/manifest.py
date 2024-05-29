@@ -909,7 +909,7 @@ class ManifestListWriterV2(ManifestListWriter):
         self._sequence_number = sequence_number
 
     def prepare_manifest(self, manifest_file: ManifestFile) -> ManifestFile:
-        wrapped_manifest_file = ManifestFile(*manifest_file.record_fields())
+        wrapped_manifest_file = ManifestFile(*manifest_file.record_values())
 
         if wrapped_manifest_file.sequence_number == UNASSIGNED_SEQ:
             # if the sequence number is being assigned here, then the manifest must be created by the current operation.

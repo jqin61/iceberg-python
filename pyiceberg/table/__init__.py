@@ -55,6 +55,7 @@ from pyiceberg.expressions import (
     And,
     BooleanExpression,
     EqualTo,
+    IsNull,
     Not,
     Or,
     Reference,
@@ -135,12 +136,15 @@ from pyiceberg.typedef import (
     TableVersion,
 )
 from pyiceberg.types import (
+    DoubleType,
     IcebergType,
     ListType,
     MapType,
     NestedField,
     PrimitiveType,
     StructType,
+    TimeType,
+    UUIDType,
     transform_dict_value_to_str,
 )
 from pyiceberg.utils.concurrent import ExecutorFactory
@@ -427,6 +431,83 @@ class Transaction:
                 )
                 for data_file in data_files:
                     update_snapshot.append_data_file(data_file)
+
+    def dynamic_overwrite(self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT) -> None:
+        """
+        Shorthand for adding a table dynamic overwrite with a PyArrow table to the transaction.
+
+        Args:
+            df: The Arrow dataframe that will be used to overwrite the table
+            snapshot_properties: Custom properties to be added to the snapshot summary
+        """
+
+        def _build_partition_predicate(spec_id: int, delete_partitions: List[Record]) -> BooleanExpression:
+            expr: BooleanExpression = AlwaysFalse()
+            print("building partitions", delete_partitions)
+            for partition in delete_partitions:
+                match_partition_expression: BooleanExpression = AlwaysTrue()
+                partition_fields = partition.record_fields()
+                print("building partition_fields", partition_fields)
+                for pos in range(len(partition_fields)):
+                    predicate = (
+                        EqualTo(Reference(partition_fields[pos]), partition[pos])
+                        if partition[pos] is not None
+                        else IsNull(Reference(partition_fields[pos]))
+                    )
+                    match_partition_expression = And(match_partition_expression, predicate)
+                    print("building partition_fieldsmatch_partition_expression", match_partition_expression)
+                expr = Or(expr, match_partition_expression)
+            return expr
+
+        try:
+            import pyarrow as pa
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError("For writes PyArrow needs to be installed") from e
+
+        if not isinstance(df, pa.Table):
+            raise ValueError(f"Expected PyArrow table, got: {df}")
+
+        # There is an issue with double encode or decoder that the double partition value read out is different from the value written
+        # e.g. double of 0.9 written into avro file will be read as 0.8999999912
+        # to do: raise for append as well
+        unsupported_partition_field_type = {DoubleType, UUIDType, TimeType}
+        for field in self.table_metadata.spec().fields:
+            field_type = type(self.table_metadata.schema().find_field(field.source_id).field_type)
+            if field_type in unsupported_partition_field_type:
+                raise ValueError(f"Does not support write for partition field {field} with type: {field_type}.")
+        print("checking pooint 0")
+        _check_schema_compatible(self._table.schema(), other_schema=df.schema)
+
+        # cast if the two schemas are compatible but not equal
+        table_arrow_schema = self._table.schema().as_arrow()
+        if table_arrow_schema != df.schema:
+            df = df.cast(table_arrow_schema)
+
+        # If dataframe does not have data, there is no need to overwrite
+        if df.shape[0] == 0:
+            return
+
+        append_snapshot_commit_uuid = uuid.uuid4()
+        data_files: List[DataFile] = list(
+            _dataframe_to_data_files(
+                table_metadata=self._table.metadata, write_uuid=append_snapshot_commit_uuid, df=df, io=self._table.io
+            )
+        )
+        with self.update_snapshot(snapshot_properties=snapshot_properties).delete() as delete_snapshot:
+            delete_partitions = [data_file.partition for data_file in data_files]
+            delete_filter = _build_partition_predicate(
+                spec_id=self.table_metadata.spec().spec_id, delete_partitions=delete_partitions
+            )
+            delete_snapshot.delete_by_predicate(delete_filter)
+            # if not isinstance(delete_snapshot, DeleteFilesByPartition):
+            #     raise ValueError("Expected DeleteFilesByPartition but get", type(delete_snapshot))
+            # delete_snapshot.delete_by_partitions([data_file.partition for data_file in data_files])
+
+        with self.update_snapshot(snapshot_properties=snapshot_properties).fast_append(
+            append_snapshot_commit_uuid
+        ) as append_snapshot:
+            for data_file in data_files:
+                append_snapshot.append_data_file(data_file)
 
     def overwrite(
         self,
@@ -1424,6 +1505,17 @@ class Table:
         """
         with self.transaction() as tx:
             tx.append(df=df, snapshot_properties=snapshot_properties)
+
+    def dynamic_overwrite(self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT) -> None:
+        """Shorthand for dynamic overwriting the table with a PyArrow table.
+
+        Old partitions are auto detected and replaced with data files created for input arrow table.
+        Args:
+            df: The Arrow dataframe that will be used to overwrite the table
+            snapshot_properties: Custom properties to be added to the snapshot summary
+        """
+        with self.transaction() as tx:
+            tx.dynamic_overwrite(df=df, snapshot_properties=snapshot_properties)
 
     def overwrite(
         self,
@@ -3003,6 +3095,7 @@ class DeleteFiles(_MergingSnapshotProducer["DeleteFiles"]):
     """
 
     _predicate: BooleanExpression
+    _only_delete_within_latest_spec: bool
 
     def __init__(
         self,
@@ -3011,9 +3104,11 @@ class DeleteFiles(_MergingSnapshotProducer["DeleteFiles"]):
         io: FileIO,
         commit_uuid: Optional[uuid.UUID] = None,
         snapshot_properties: Dict[str, str] = EMPTY_DICT,
+        only_delete_within_latest_spec: bool = False,
     ):
         super().__init__(operation, transaction, io, commit_uuid, snapshot_properties)
         self._predicate = AlwaysFalse()
+        self._only_delete_within_latest_spec = only_delete_within_latest_spec
 
     def _commit(self) -> UpdatesAndRequirements:
         # Only produce a commit when there is something to delete
@@ -3070,6 +3165,17 @@ class DeleteFiles(_MergingSnapshotProducer["DeleteFiles"]):
         self._deleted_data_files = set()
         if snapshot := self._transaction.table_metadata.current_snapshot():
             for manifest_file in snapshot.manifests(io=self._io):
+                if (
+                    self._only_delete_within_latest_spec
+                    and manifest_file.partition_spec_id != self._transaction.table_metadata.spec().spec_id
+                ):
+                    print(
+                        "deep: manifest_file.partition_spec_id",
+                        manifest_file.partition_spec_id,
+                        self._transaction.table_metadata.spec().spec_id,
+                    )
+                    existing_manifests.append(manifest_file)
+                    continue
                 if manifest_file.content == ManifestContent.DATA:
                     if not manifest_evaluators[manifest_file.partition_spec_id](manifest_file):
                         # If the manifest isn't relevant, we can just keep it in the manifest-list
@@ -3252,9 +3358,13 @@ class UpdateSnapshot:
         self._io = io
         self._snapshot_properties = snapshot_properties
 
-    def fast_append(self) -> FastAppendFiles:
+    def fast_append(self, commit_uuid: Optional[uuid.UUID] = None) -> FastAppendFiles:
         return FastAppendFiles(
-            operation=Operation.APPEND, transaction=self._transaction, io=self._io, snapshot_properties=self._snapshot_properties
+            operation=Operation.APPEND,
+            transaction=self._transaction,
+            io=self._io,
+            snapshot_properties=self._snapshot_properties,
+            commit_uuid=commit_uuid,
         )
 
     def overwrite(self, commit_uuid: Optional[uuid.UUID] = None) -> OverwriteFiles:
@@ -3268,12 +3378,13 @@ class UpdateSnapshot:
             snapshot_properties=self._snapshot_properties,
         )
 
-    def delete(self) -> DeleteFiles:
+    def delete(self, only_delete_within_latest_spec: bool = False) -> DeleteFiles:
         return DeleteFiles(
             operation=Operation.DELETE,
             transaction=self._transaction,
             io=self._io,
             snapshot_properties=self._snapshot_properties,
+            only_delete_within_latest_spec=only_delete_within_latest_spec,
         )
 
 
