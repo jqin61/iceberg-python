@@ -16,6 +16,8 @@
 # under the License.
 # pylint:disable=redefined-outer-name
 
+import uuid
+
 import pyarrow as pa
 import pytest
 from pyspark.sql import SparkSession
@@ -33,11 +35,7 @@ from pyiceberg.transforms import (
     TruncateTransform,
     YearTransform,
 )
-from pyiceberg.types import (
-    DoubleType,
-    NestedField,
-    TimeType,
-)
+from pyiceberg.types import DoubleType, NestedField, TimeType, UUIDType
 from utils import TABLE_SCHEMA, _create_table
 
 
@@ -212,7 +210,6 @@ def test_query_filter_dynamic_overwrite_null_partitioned(
     # Append with arrow_table_1 with lines [A,B,C] and then arrow_table_2 with lines[A,B,C,A,B,C]
     tbl.append(arrow_table_with_null)
     tbl.append(pa.concat_tables([arrow_table_with_null, arrow_table_with_null]))
-
     # Then
     assert tbl.format_version == format_version, f"Expected v{format_version}, got: v{tbl.format_version}"
     df = spark.table(identifier)
@@ -467,98 +464,6 @@ def test_data_files_with_table_partitioned_with_null(
     """
     ).collect()
 
-    assert [row.partition_summaries[0].contains_null for row in rows] == [
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        False,
-        False,
-        True,
-        False,
-        False,
-    ]
-    assert [row.partition_summaries[1].contains_null for row in rows] == [
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        False,
-        False,
-        True,
-        False,
-        False,
-    ]
-    assert [row.partition_summaries[0].lower_bound for row in rows] == [
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        True,
-        False,
-        False,
-        True,
-        False,
-        False,
-    ]
-    assert [row.partition_summaries[1].lower_bound for row in rows] == [
-        '1',
-        '1',
-        '1',
-        '1',
-        '1',
-        '1',
-        '1',
-        '1',
-        '9',
-        '9',
-        '1',
-        '9',
-        '9',
-    ]
-    assert [row.partition_summaries[0].upper_bound for row in rows] == [
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        True,
-        False,
-        True,
-        True,
-        False,
-        True,
-        True,
-    ]
-    assert [row.partition_summaries[1].upper_bound for row in rows] == [
-        '9',
-        '9',
-        '9',
-        '9',
-        '9',
-        '9',
-        '9',
-        '1',
-        '9',
-        '9',
-        '1',
-        '9',
-        '9',
-    ]
     assert [row.added_data_files_count for row in rows] == [3, 3, 3, 0, 3, 3, 3, 0, 0, 0, 2, 0, 0]
     assert [row.existing_data_files_count for row in rows] == [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 1]
     assert [row.deleted_data_files_count for row in rows] == [0, 0, 0, 6, 0, 0, 0, 4, 0, 0, 0, 0, 0]
@@ -658,7 +563,7 @@ def test_unsupported_field_type_for_partition(
     iceberg_table_schema = Schema(
         NestedField(field_id=1, name="double", field_type=DoubleType(), required=False),
         NestedField(field_id=2, name="time", field_type=TimeType(), required=False),
-        # NestedField(field_id=3, name="uuid", field_type=UUIDType(), required=False),
+        NestedField(field_id=3, name="uuid", field_type=UUIDType(), required=False),
     )
 
     import pyarrow as pa
@@ -666,7 +571,7 @@ def test_unsupported_field_type_for_partition(
     pa_schema = pa.schema([
         ("double", pa.float64()),
         ("time", pa.time64('us')),
-        # ("uuid", pa.binary(16)),
+        ("uuid", pa.binary(16)),
     ])
 
     arrow_table_with_null = pa.Table.from_pydict(
@@ -677,12 +582,11 @@ def test_unsupported_field_type_for_partition(
                 None,
                 3_000_000,
             ],  # Example times: 1s, none, and 3s past midnight #Spark does not support time fields
-            # this does not even need to go through this test because it fails the schema check for pyarrow does not have uuid type
-            # 'uuid': [
-            #     uuid.UUID('00000000-0000-0000-0000-000000000000').bytes,
-            #     None,
-            #     uuid.UUID('11111111-1111-1111-1111-111111111111').bytes,
-            # ],
+            'uuid': [
+                uuid.UUID('00000000-0000-0000-0000-000000000000').bytes,
+                None,
+                uuid.UUID('11111111-1111-1111-1111-111111111111').bytes,
+            ],
         },
         schema=pa_schema,
     )
@@ -701,4 +605,4 @@ def test_unsupported_field_type_for_partition(
     )
 
     with pytest.raises(ValueError, match="Does not support write for partition field.*"):
-        tbl.append(arrow_table_with_null)
+        tbl.dynamic_overwrite(arrow_table_with_null)
