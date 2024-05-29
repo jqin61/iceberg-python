@@ -16,7 +16,6 @@
 # under the License.
 # pylint:disable=redefined-outer-name
 
-import uuid
 
 import pyarrow as pa
 import pytest
@@ -25,7 +24,6 @@ from pyspark.sql import SparkSession
 from pyiceberg.catalog import Catalog
 from pyiceberg.exceptions import NoSuchTableError
 from pyiceberg.partitioning import PartitionField, PartitionSpec
-from pyiceberg.schema import Schema
 from pyiceberg.transforms import (
     BucketTransform,
     DayTransform,
@@ -35,7 +33,6 @@ from pyiceberg.transforms import (
     TruncateTransform,
     YearTransform,
 )
-from pyiceberg.types import DoubleType, NestedField, TimeType, UUIDType
 from utils import TABLE_SCHEMA, _create_table
 
 
@@ -183,7 +180,19 @@ def test_query_filter_appended_null_partitioned(
 @pytest.mark.integration
 @pytest.mark.parametrize(
     "part_col",
-    ['int', 'bool', 'string', "string_long", "long", "float", "date", "timestamp", "binary", "timestamptz"],
+    [
+        'int',
+        'bool',
+        'string',
+        "string_long",
+        "long",
+        "float",
+        "double",
+        "date",
+        "timestamp",
+        "binary",
+        "timestamptz",
+    ],
 )
 @pytest.mark.parametrize(
     "format_version",
@@ -546,63 +555,3 @@ def test_unsupported_transform(
 
     with pytest.raises(ValueError, match="All transforms are not supported.*"):
         tbl.append(arrow_table_with_null)
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize(
-    "spec",
-    [
-        (PartitionSpec(PartitionField(source_id=1, field_id=1001, transform=IdentityTransform(), name="double"))),
-        (PartitionSpec(PartitionField(source_id=2, field_id=1001, transform=IdentityTransform(), name="time"))),
-        (PartitionSpec(PartitionField(source_id=3, field_id=1001, transform=IdentityTransform(), name="uuid"))),
-    ],
-)
-def test_unsupported_field_type_for_partition(
-    spec: PartitionSpec, spark: SparkSession, session_catalog: Catalog, arrow_table_with_null: pa.Table
-) -> None:
-    iceberg_table_schema = Schema(
-        NestedField(field_id=1, name="double", field_type=DoubleType(), required=False),
-        NestedField(field_id=2, name="time", field_type=TimeType(), required=False),
-        NestedField(field_id=3, name="uuid", field_type=UUIDType(), required=False),
-    )
-
-    import pyarrow as pa
-
-    pa_schema = pa.schema([
-        ("double", pa.float64()),
-        ("time", pa.time64('us')),
-        ("uuid", pa.binary(16)),
-    ])
-
-    arrow_table_with_null = pa.Table.from_pydict(
-        {
-            'double': [0.0, None, 0.9],
-            'time': [
-                1_000_000,
-                None,
-                3_000_000,
-            ],  # Example times: 1s, none, and 3s past midnight #Spark does not support time fields
-            'uuid': [
-                uuid.UUID('00000000-0000-0000-0000-000000000000').bytes,
-                None,
-                uuid.UUID('11111111-1111-1111-1111-111111111111').bytes,
-            ],
-        },
-        schema=pa_schema,
-    )
-    identifier = "default.unsupported_field_type_on_partition"
-
-    try:
-        session_catalog.drop_table(identifier=identifier)
-    except NoSuchTableError:
-        pass
-
-    tbl = session_catalog.create_table(
-        identifier=identifier,
-        schema=iceberg_table_schema,
-        partition_spec=spec,
-        properties={'format-version': '1'},
-    )
-
-    with pytest.raises(ValueError, match="Does not support write for partition field.*"):
-        tbl.dynamic_overwrite(arrow_table_with_null)

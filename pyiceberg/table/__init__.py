@@ -136,15 +136,12 @@ from pyiceberg.typedef import (
     TableVersion,
 )
 from pyiceberg.types import (
-    DoubleType,
     IcebergType,
     ListType,
     MapType,
     NestedField,
     PrimitiveType,
     StructType,
-    TimeType,
-    UUIDType,
     transform_dict_value_to_str,
 )
 from pyiceberg.utils.concurrent import ExecutorFactory
@@ -443,11 +440,9 @@ class Transaction:
 
         def _build_partition_predicate(spec_id: int, delete_partitions: List[Record]) -> BooleanExpression:
             expr: BooleanExpression = AlwaysFalse()
-            print("building partitions", delete_partitions)
             for partition in delete_partitions:
                 match_partition_expression: BooleanExpression = AlwaysTrue()
                 partition_fields = partition.record_fields()
-                print("building partition_fields", partition_fields)
                 for pos in range(len(partition_fields)):
                     predicate = (
                         EqualTo(Reference(partition_fields[pos]), partition[pos])
@@ -455,7 +450,6 @@ class Transaction:
                         else IsNull(Reference(partition_fields[pos]))
                     )
                     match_partition_expression = And(match_partition_expression, predicate)
-                    print("building partition_fieldsmatch_partition_expression", match_partition_expression)
                 expr = Or(expr, match_partition_expression)
             return expr
 
@@ -467,15 +461,6 @@ class Transaction:
         if not isinstance(df, pa.Table):
             raise ValueError(f"Expected PyArrow table, got: {df}")
 
-        # There is an issue with double encode or decoder that the double partition value read out is different from the value written
-        # e.g. double of 0.9 written into avro file will be read as 0.8999999912
-        # to do: raise for append as well
-        unsupported_partition_field_type = {DoubleType, UUIDType, TimeType}
-        for field in self.table_metadata.spec().fields:
-            field_type = type(self.table_metadata.schema().find_field(field.source_id).field_type)
-            if field_type in unsupported_partition_field_type:
-                raise ValueError(f"Does not support write for partition field {field} with type: {field_type}.")
-        print("checking pooint 0")
         _check_schema_compatible(self._table.schema(), other_schema=df.schema)
 
         # cast if the two schemas are compatible but not equal
