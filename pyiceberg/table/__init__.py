@@ -3154,11 +3154,6 @@ class DeleteFiles(_MergingSnapshotProducer["DeleteFiles"]):
                     self._only_delete_within_latest_spec
                     and manifest_file.partition_spec_id != self._transaction.table_metadata.spec().spec_id
                 ):
-                    print(
-                        "deep: manifest_file.partition_spec_id",
-                        manifest_file.partition_spec_id,
-                        self._transaction.table_metadata.spec().spec_id,
-                    )
                     existing_manifests.append(manifest_file)
                     continue
                 if manifest_file.content == ManifestContent.DATA:
