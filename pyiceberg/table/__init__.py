@@ -484,9 +484,6 @@ class Transaction:
                 spec_id=self.table_metadata.spec().spec_id, delete_partitions=delete_partitions
             )
             delete_snapshot.delete_by_predicate(delete_filter)
-            # if not isinstance(delete_snapshot, DeleteFilesByPartition):
-            #     raise ValueError("Expected DeleteFilesByPartition but get", type(delete_snapshot))
-            # delete_snapshot.delete_by_partitions([data_file.partition for data_file in data_files])
 
         with self.update_snapshot(snapshot_properties=snapshot_properties).fast_append(
             append_snapshot_commit_uuid
