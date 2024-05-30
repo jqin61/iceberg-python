@@ -24,6 +24,8 @@ from hive_metastore.ttypes import (
     AlreadyExistsException,
     FieldSchema,
     InvalidOperationException,
+    LockResponse,
+    LockState,
     MetaException,
     NoSuchObjectException,
     SerDeInfo,
@@ -34,12 +36,19 @@ from hive_metastore.ttypes import Database as HiveDatabase
 from hive_metastore.ttypes import Table as HiveTable
 
 from pyiceberg.catalog import PropertiesUpdateSummary
-from pyiceberg.catalog.hive import HiveCatalog, _construct_hive_storage_descriptor
+from pyiceberg.catalog.hive import (
+    LOCK_CHECK_MAX_WAIT_TIME,
+    LOCK_CHECK_MIN_WAIT_TIME,
+    LOCK_CHECK_RETRIES,
+    HiveCatalog,
+    _construct_hive_storage_descriptor,
+)
 from pyiceberg.exceptions import (
     NamespaceAlreadyExistsError,
     NamespaceNotEmptyError,
     NoSuchNamespaceError,
     NoSuchTableError,
+    WaitingForLockException,
 )
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
@@ -225,27 +234,27 @@ def test_create_table(
             retention=None,
             sd=StorageDescriptor(
                 cols=[
-                    FieldSchema(name='boolean', type='boolean', comment=None),
-                    FieldSchema(name='integer', type='int', comment=None),
-                    FieldSchema(name='long', type='bigint', comment=None),
-                    FieldSchema(name='float', type='float', comment=None),
-                    FieldSchema(name='double', type='double', comment=None),
-                    FieldSchema(name='decimal', type='decimal(32,3)', comment=None),
-                    FieldSchema(name='date', type='date', comment=None),
-                    FieldSchema(name='time', type='string', comment=None),
-                    FieldSchema(name='timestamp', type='timestamp', comment=None),
+                    FieldSchema(name="boolean", type="boolean", comment=None),
+                    FieldSchema(name="integer", type="int", comment=None),
+                    FieldSchema(name="long", type="bigint", comment=None),
+                    FieldSchema(name="float", type="float", comment=None),
+                    FieldSchema(name="double", type="double", comment=None),
+                    FieldSchema(name="decimal", type="decimal(32,3)", comment=None),
+                    FieldSchema(name="date", type="date", comment=None),
+                    FieldSchema(name="time", type="string", comment=None),
+                    FieldSchema(name="timestamp", type="timestamp", comment=None),
                     FieldSchema(
-                        name='timestamptz',
-                        type='timestamp' if hive2_compatible else 'timestamp with local time zone',
+                        name="timestamptz",
+                        type="timestamp" if hive2_compatible else "timestamp with local time zone",
                         comment=None,
                     ),
-                    FieldSchema(name='string', type='string', comment=None),
-                    FieldSchema(name='uuid', type='string', comment=None),
-                    FieldSchema(name='fixed', type='binary', comment=None),
-                    FieldSchema(name='binary', type='binary', comment=None),
-                    FieldSchema(name='list', type='array<string>', comment=None),
-                    FieldSchema(name='map', type='map<string,int>', comment=None),
-                    FieldSchema(name='struct', type='struct<inner_string:string,inner_int:int>', comment=None),
+                    FieldSchema(name="string", type="string", comment=None),
+                    FieldSchema(name="uuid", type="string", comment=None),
+                    FieldSchema(name="fixed", type="binary", comment=None),
+                    FieldSchema(name="binary", type="binary", comment=None),
+                    FieldSchema(name="list", type="array<string>", comment=None),
+                    FieldSchema(name="map", type="map<string,int>", comment=None),
+                    FieldSchema(name="struct", type="struct<inner_string:string,inner_int:int>", comment=None),
                 ],
                 location=f"{hive_database.locationUri}/table",
                 inputFormat="org.apache.hadoop.mapred.FileInputFormat",
@@ -305,40 +314,40 @@ def test_create_table(
         last_column_id=22,
         schemas=[
             Schema(
-                NestedField(field_id=1, name='boolean', field_type=BooleanType(), required=True),
-                NestedField(field_id=2, name='integer', field_type=IntegerType(), required=True),
-                NestedField(field_id=3, name='long', field_type=LongType(), required=True),
-                NestedField(field_id=4, name='float', field_type=FloatType(), required=True),
-                NestedField(field_id=5, name='double', field_type=DoubleType(), required=True),
-                NestedField(field_id=6, name='decimal', field_type=DecimalType(precision=32, scale=3), required=True),
-                NestedField(field_id=7, name='date', field_type=DateType(), required=True),
-                NestedField(field_id=8, name='time', field_type=TimeType(), required=True),
-                NestedField(field_id=9, name='timestamp', field_type=TimestampType(), required=True),
-                NestedField(field_id=10, name='timestamptz', field_type=TimestamptzType(), required=True),
-                NestedField(field_id=11, name='string', field_type=StringType(), required=True),
-                NestedField(field_id=12, name='uuid', field_type=UUIDType(), required=True),
-                NestedField(field_id=13, name='fixed', field_type=FixedType(length=12), required=True),
-                NestedField(field_id=14, name='binary', field_type=BinaryType(), required=True),
+                NestedField(field_id=1, name="boolean", field_type=BooleanType(), required=True),
+                NestedField(field_id=2, name="integer", field_type=IntegerType(), required=True),
+                NestedField(field_id=3, name="long", field_type=LongType(), required=True),
+                NestedField(field_id=4, name="float", field_type=FloatType(), required=True),
+                NestedField(field_id=5, name="double", field_type=DoubleType(), required=True),
+                NestedField(field_id=6, name="decimal", field_type=DecimalType(precision=32, scale=3), required=True),
+                NestedField(field_id=7, name="date", field_type=DateType(), required=True),
+                NestedField(field_id=8, name="time", field_type=TimeType(), required=True),
+                NestedField(field_id=9, name="timestamp", field_type=TimestampType(), required=True),
+                NestedField(field_id=10, name="timestamptz", field_type=TimestamptzType(), required=True),
+                NestedField(field_id=11, name="string", field_type=StringType(), required=True),
+                NestedField(field_id=12, name="uuid", field_type=UUIDType(), required=True),
+                NestedField(field_id=13, name="fixed", field_type=FixedType(length=12), required=True),
+                NestedField(field_id=14, name="binary", field_type=BinaryType(), required=True),
                 NestedField(
                     field_id=15,
-                    name='list',
-                    field_type=ListType(type='list', element_id=18, element_type=StringType(), element_required=True),
+                    name="list",
+                    field_type=ListType(type="list", element_id=18, element_type=StringType(), element_required=True),
                     required=True,
                 ),
                 NestedField(
                     field_id=16,
-                    name='map',
+                    name="map",
                     field_type=MapType(
-                        type='map', key_id=19, key_type=StringType(), value_id=20, value_type=IntegerType(), value_required=True
+                        type="map", key_id=19, key_type=StringType(), value_id=20, value_type=IntegerType(), value_required=True
                     ),
                     required=True,
                 ),
                 NestedField(
                     field_id=17,
-                    name='struct',
+                    name="struct",
                     field_type=StructType(
-                        NestedField(field_id=21, name='inner_string', field_type=StringType(), required=False),
-                        NestedField(field_id=22, name='inner_int', field_type=IntegerType(), required=True),
+                        NestedField(field_id=21, name="inner_string", field_type=StringType(), required=False),
+                        NestedField(field_id=22, name="inner_int", field_type=IntegerType(), required=True),
                     ),
                     required=False,
                 ),
@@ -348,7 +357,7 @@ def test_create_table(
         ],
         current_schema_id=0,
         last_partition_id=999,
-        properties={"owner": "javaberg", 'write.parquet.compression-codec': 'zstd'},
+        properties={"owner": "javaberg", "write.parquet.compression-codec": "zstd"},
         partition_specs=[PartitionSpec()],
         default_spec_id=0,
         current_snapshot_id=None,
@@ -400,27 +409,27 @@ def test_create_table_with_given_location_removes_trailing_slash(
             retention=None,
             sd=StorageDescriptor(
                 cols=[
-                    FieldSchema(name='boolean', type='boolean', comment=None),
-                    FieldSchema(name='integer', type='int', comment=None),
-                    FieldSchema(name='long', type='bigint', comment=None),
-                    FieldSchema(name='float', type='float', comment=None),
-                    FieldSchema(name='double', type='double', comment=None),
-                    FieldSchema(name='decimal', type='decimal(32,3)', comment=None),
-                    FieldSchema(name='date', type='date', comment=None),
-                    FieldSchema(name='time', type='string', comment=None),
-                    FieldSchema(name='timestamp', type='timestamp', comment=None),
+                    FieldSchema(name="boolean", type="boolean", comment=None),
+                    FieldSchema(name="integer", type="int", comment=None),
+                    FieldSchema(name="long", type="bigint", comment=None),
+                    FieldSchema(name="float", type="float", comment=None),
+                    FieldSchema(name="double", type="double", comment=None),
+                    FieldSchema(name="decimal", type="decimal(32,3)", comment=None),
+                    FieldSchema(name="date", type="date", comment=None),
+                    FieldSchema(name="time", type="string", comment=None),
+                    FieldSchema(name="timestamp", type="timestamp", comment=None),
                     FieldSchema(
-                        name='timestamptz',
-                        type='timestamp' if hive2_compatible else 'timestamp with local time zone',
+                        name="timestamptz",
+                        type="timestamp" if hive2_compatible else "timestamp with local time zone",
                         comment=None,
                     ),
-                    FieldSchema(name='string', type='string', comment=None),
-                    FieldSchema(name='uuid', type='string', comment=None),
-                    FieldSchema(name='fixed', type='binary', comment=None),
-                    FieldSchema(name='binary', type='binary', comment=None),
-                    FieldSchema(name='list', type='array<string>', comment=None),
-                    FieldSchema(name='map', type='map<string,int>', comment=None),
-                    FieldSchema(name='struct', type='struct<inner_string:string,inner_int:int>', comment=None),
+                    FieldSchema(name="string", type="string", comment=None),
+                    FieldSchema(name="uuid", type="string", comment=None),
+                    FieldSchema(name="fixed", type="binary", comment=None),
+                    FieldSchema(name="binary", type="binary", comment=None),
+                    FieldSchema(name="list", type="array<string>", comment=None),
+                    FieldSchema(name="map", type="map<string,int>", comment=None),
+                    FieldSchema(name="struct", type="struct<inner_string:string,inner_int:int>", comment=None),
                 ],
                 location=f"{hive_database.locationUri}/table-given-location",
                 inputFormat="org.apache.hadoop.mapred.FileInputFormat",
@@ -480,40 +489,40 @@ def test_create_table_with_given_location_removes_trailing_slash(
         last_column_id=22,
         schemas=[
             Schema(
-                NestedField(field_id=1, name='boolean', field_type=BooleanType(), required=True),
-                NestedField(field_id=2, name='integer', field_type=IntegerType(), required=True),
-                NestedField(field_id=3, name='long', field_type=LongType(), required=True),
-                NestedField(field_id=4, name='float', field_type=FloatType(), required=True),
-                NestedField(field_id=5, name='double', field_type=DoubleType(), required=True),
-                NestedField(field_id=6, name='decimal', field_type=DecimalType(precision=32, scale=3), required=True),
-                NestedField(field_id=7, name='date', field_type=DateType(), required=True),
-                NestedField(field_id=8, name='time', field_type=TimeType(), required=True),
-                NestedField(field_id=9, name='timestamp', field_type=TimestampType(), required=True),
-                NestedField(field_id=10, name='timestamptz', field_type=TimestamptzType(), required=True),
-                NestedField(field_id=11, name='string', field_type=StringType(), required=True),
-                NestedField(field_id=12, name='uuid', field_type=UUIDType(), required=True),
-                NestedField(field_id=13, name='fixed', field_type=FixedType(length=12), required=True),
-                NestedField(field_id=14, name='binary', field_type=BinaryType(), required=True),
+                NestedField(field_id=1, name="boolean", field_type=BooleanType(), required=True),
+                NestedField(field_id=2, name="integer", field_type=IntegerType(), required=True),
+                NestedField(field_id=3, name="long", field_type=LongType(), required=True),
+                NestedField(field_id=4, name="float", field_type=FloatType(), required=True),
+                NestedField(field_id=5, name="double", field_type=DoubleType(), required=True),
+                NestedField(field_id=6, name="decimal", field_type=DecimalType(precision=32, scale=3), required=True),
+                NestedField(field_id=7, name="date", field_type=DateType(), required=True),
+                NestedField(field_id=8, name="time", field_type=TimeType(), required=True),
+                NestedField(field_id=9, name="timestamp", field_type=TimestampType(), required=True),
+                NestedField(field_id=10, name="timestamptz", field_type=TimestamptzType(), required=True),
+                NestedField(field_id=11, name="string", field_type=StringType(), required=True),
+                NestedField(field_id=12, name="uuid", field_type=UUIDType(), required=True),
+                NestedField(field_id=13, name="fixed", field_type=FixedType(length=12), required=True),
+                NestedField(field_id=14, name="binary", field_type=BinaryType(), required=True),
                 NestedField(
                     field_id=15,
-                    name='list',
-                    field_type=ListType(type='list', element_id=18, element_type=StringType(), element_required=True),
+                    name="list",
+                    field_type=ListType(type="list", element_id=18, element_type=StringType(), element_required=True),
                     required=True,
                 ),
                 NestedField(
                     field_id=16,
-                    name='map',
+                    name="map",
                     field_type=MapType(
-                        type='map', key_id=19, key_type=StringType(), value_id=20, value_type=IntegerType(), value_required=True
+                        type="map", key_id=19, key_type=StringType(), value_id=20, value_type=IntegerType(), value_required=True
                     ),
                     required=True,
                 ),
                 NestedField(
                     field_id=17,
-                    name='struct',
+                    name="struct",
                     field_type=StructType(
-                        NestedField(field_id=21, name='inner_string', field_type=StringType(), required=False),
-                        NestedField(field_id=22, name='inner_int', field_type=IntegerType(), required=True),
+                        NestedField(field_id=21, name="inner_string", field_type=StringType(), required=False),
+                        NestedField(field_id=22, name="inner_int", field_type=IntegerType(), required=True),
                     ),
                     required=False,
                 ),
@@ -523,7 +532,7 @@ def test_create_table_with_given_location_removes_trailing_slash(
         ],
         current_schema_id=0,
         last_partition_id=999,
-        properties={"owner": "javaberg", 'write.parquet.compression-codec': 'zstd'},
+        properties={"owner": "javaberg", "write.parquet.compression-codec": "zstd"},
         partition_specs=[PartitionSpec()],
         default_spec_id=0,
         current_snapshot_id=None,
@@ -1158,3 +1167,31 @@ def test_resolve_table_location_warehouse(hive_database: HiveDatabase) -> None:
 
     location = catalog._resolve_table_location(None, "database", "table")
     assert location == "/tmp/warehouse/database.db/table"
+
+
+def test_hive_wait_for_lock() -> None:
+    lockid = 12345
+    acquired = LockResponse(lockid=lockid, state=LockState.ACQUIRED)
+    waiting = LockResponse(lockid=lockid, state=LockState.WAITING)
+    prop = {
+        "uri": HIVE_METASTORE_FAKE_URL,
+        LOCK_CHECK_MIN_WAIT_TIME: 0.1,
+        LOCK_CHECK_MAX_WAIT_TIME: 0.5,
+        LOCK_CHECK_RETRIES: 5,
+    }
+    catalog = HiveCatalog(HIVE_CATALOG_NAME, **prop)  # type: ignore
+    catalog._client = MagicMock()
+    catalog._client.lock.return_value = LockResponse(lockid=lockid, state=LockState.WAITING)
+
+    # lock will be acquired after 3 retries
+    catalog._client.check_lock.side_effect = [waiting if i < 2 else acquired for i in range(10)]
+    response: LockResponse = catalog._wait_for_lock("db", "tbl", lockid, catalog._client)
+    assert response.state == LockState.ACQUIRED
+    assert catalog._client.check_lock.call_count == 3
+
+    # lock wait should exit with WaitingForLockException finally after enough retries
+    catalog._client.check_lock.side_effect = [waiting for _ in range(10)]
+    catalog._client.check_lock.call_count = 0
+    with pytest.raises(WaitingForLockException):
+        catalog._wait_for_lock("db", "tbl", lockid, catalog._client)
+    assert catalog._client.check_lock.call_count == 5

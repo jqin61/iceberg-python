@@ -38,7 +38,7 @@ from utils import TABLE_SCHEMA, _create_table
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "part_col", ['int', 'bool', 'string', "string_long", "long", "float", "double", "date", 'timestamp', 'timestamptz', 'binary']
+    "part_col", ["int", "bool", "string", "string_long", "long", "float", "double", "date", "timestamp", "timestamptz", "binary"]
 )
 @pytest.mark.parametrize("format_version", [1, 2])
 def test_query_filter_null_partitioned(
@@ -71,7 +71,7 @@ def test_query_filter_null_partitioned(
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "part_col", ['int', 'bool', 'string', "string_long", "long", "float", "double", "date", 'timestamp', 'timestamptz', 'binary']
+    "part_col", ["int", "bool", "string", "string_long", "long", "float", "double", "date", "timestamp", "timestamptz", "binary"]
 )
 @pytest.mark.parametrize("format_version", [1, 2])
 def test_query_filter_without_data_partitioned(
@@ -108,7 +108,7 @@ def test_query_filter_without_data_partitioned(
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "part_col", ['int', 'bool', 'string', "string_long", "long", "float", "double", "date", 'timestamp', 'timestamptz', 'binary']
+    "part_col", ["int", "bool", "string", "string_long", "long", "float", "double", "date", "timestamp", "timestamptz", "binary"]
 )
 @pytest.mark.parametrize("format_version", [1, 2])
 def test_query_filter_only_nulls_partitioned(
@@ -140,7 +140,7 @@ def test_query_filter_only_nulls_partitioned(
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "part_col", ['int', 'bool', 'string', "string_long", "long", "float", "double", "date", "timestamptz", "timestamp", "binary"]
+    "part_col", ["int", "bool", "string", "string_long", "long", "float", "double", "date", "timestamptz", "timestamp", "binary"]
 )
 @pytest.mark.parametrize("format_version", [1, 2])
 def test_query_filter_appended_null_partitioned(
@@ -297,7 +297,7 @@ def test_summaries_with_null(spark: SparkSession, session_catalog: Catalog, arro
         identifier=identifier,
         schema=TABLE_SCHEMA,
         partition_spec=PartitionSpec(PartitionField(source_id=4, field_id=1001, transform=IdentityTransform(), name="int")),
-        properties={'format-version': '2'},
+        properties={"format-version": "2"},
     )
 
     tbl.append(arrow_table_with_null)
@@ -491,7 +491,7 @@ def test_invalid_arguments(spark: SparkSession, session_catalog: Catalog) -> Non
         identifier=identifier,
         schema=TABLE_SCHEMA,
         partition_spec=PartitionSpec(PartitionField(source_id=4, field_id=1001, transform=IdentityTransform(), name="int")),
-        properties={'format-version': '1'},
+        properties={"format-version": "1"},
     )
 
     with pytest.raises(ValueError, match="Expected PyArrow table, got: not a df"):
@@ -550,7 +550,7 @@ def test_unsupported_transform(
         identifier=identifier,
         schema=TABLE_SCHEMA,
         partition_spec=spec,
-        properties={'format-version': '1'},
+        properties={"format-version": "1"},
     )
 
     with pytest.raises(ValueError, match="All transforms are not supported.*"):
