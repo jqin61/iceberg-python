@@ -440,6 +440,25 @@ class Transaction:
                 for data_file in data_files:
                     update_snapshot.append_data_file(data_file)
 
+    def _build_partition_predicate(self, spec_id: int, delete_partitions: List[Record]) -> BooleanExpression:
+        partition_spec = self.table_metadata.spec()
+        schema = self.table_metadata.schema()
+        partition_fields = [schema.find_field(field.source_id).name for field in partition_spec.fields]
+
+        expr: BooleanExpression = AlwaysFalse()
+        for partition_record in delete_partitions:
+            match_partition_expression: BooleanExpression = AlwaysTrue()
+
+            for pos in range(len(partition_fields)):
+                predicate = (
+                    EqualTo(Reference(partition_fields[pos]), partition_record[pos])
+                    if partition_record[pos] is not None
+                    else IsNull(Reference(partition_fields[pos]))
+                )
+                match_partition_expression = And(match_partition_expression, predicate)
+            expr = Or(expr, match_partition_expression)
+        return expr
+
     def dynamic_overwrite(self, df: pa.Table, snapshot_properties: Dict[str, str] = EMPTY_DICT) -> None:
         """
         Shorthand for adding a table dynamic overwrite with a PyArrow table to the transaction.
@@ -448,21 +467,6 @@ class Transaction:
             df: The Arrow dataframe that will be used to overwrite the table
             snapshot_properties: Custom properties to be added to the snapshot summary
         """
-
-        def _build_partition_predicate(spec_id: int, delete_partitions: List[Record]) -> BooleanExpression:
-            expr: BooleanExpression = AlwaysFalse()
-            for partition in delete_partitions:
-                match_partition_expression: BooleanExpression = AlwaysTrue()
-                partition_fields = partition.record_fields()
-                for pos in range(len(partition_fields)):
-                    predicate = (
-                        EqualTo(Reference(partition_fields[pos]), partition[pos])
-                        if partition[pos] is not None
-                        else IsNull(Reference(partition_fields[pos]))
-                    )
-                    match_partition_expression = And(match_partition_expression, predicate)
-                expr = Or(expr, match_partition_expression)
-            return expr
 
         try:
             import pyarrow as pa
@@ -489,11 +493,9 @@ class Transaction:
                 table_metadata=self._table.metadata, write_uuid=append_snapshot_commit_uuid, df=df, io=self._table.io
             )
         )
-        with self.update_snapshot(snapshot_properties=snapshot_properties).delete(
-            only_delete_within_latest_spec=True
-        ) as delete_snapshot:
+        with self.update_snapshot(snapshot_properties=snapshot_properties).delete() as delete_snapshot:
             delete_partitions = [data_file.partition for data_file in data_files]
-            delete_filter = _build_partition_predicate(
+            delete_filter = self._build_partition_predicate(
                 spec_id=self.table_metadata.spec().spec_id, delete_partitions=delete_partitions
             )
             delete_snapshot.delete_by_predicate(delete_filter)
@@ -3090,7 +3092,6 @@ class DeleteFiles(_MergingSnapshotProducer["DeleteFiles"]):
     """
 
     _predicate: BooleanExpression
-    _only_delete_within_latest_spec: bool
 
     def __init__(
         self,
@@ -3099,11 +3100,9 @@ class DeleteFiles(_MergingSnapshotProducer["DeleteFiles"]):
         io: FileIO,
         commit_uuid: Optional[uuid.UUID] = None,
         snapshot_properties: Dict[str, str] = EMPTY_DICT,
-        only_delete_within_latest_spec: bool = False,
     ):
         super().__init__(operation, transaction, io, commit_uuid, snapshot_properties)
         self._predicate = AlwaysFalse()
-        self._only_delete_within_latest_spec = only_delete_within_latest_spec
 
     def _commit(self) -> UpdatesAndRequirements:
         # Only produce a commit when there is something to delete
@@ -3160,12 +3159,6 @@ class DeleteFiles(_MergingSnapshotProducer["DeleteFiles"]):
         self._deleted_data_files = set()
         if snapshot := self._transaction.table_metadata.current_snapshot():
             for manifest_file in snapshot.manifests(io=self._io):
-                if (
-                    self._only_delete_within_latest_spec
-                    and manifest_file.partition_spec_id != self._transaction.table_metadata.spec().spec_id
-                ):
-                    existing_manifests.append(manifest_file)
-                    continue
                 if manifest_file.content == ManifestContent.DATA:
                     if not manifest_evaluators[manifest_file.partition_spec_id](manifest_file):
                         # If the manifest isn't relevant, we can just keep it in the manifest-list
@@ -3370,13 +3363,12 @@ class UpdateSnapshot:
             snapshot_properties=self._snapshot_properties,
         )
 
-    def delete(self, only_delete_within_latest_spec: bool = False) -> DeleteFiles:
+    def delete(self) -> DeleteFiles:
         return DeleteFiles(
             operation=Operation.DELETE,
             transaction=self._transaction,
             io=self._io,
             snapshot_properties=self._snapshot_properties,
-            only_delete_within_latest_spec=only_delete_within_latest_spec,
         )
 
 
